@@ -35,6 +35,7 @@ class CalibrationService(QObject):
         self._data: Dict[str, Optional[S2PData]] = {
             "cal1": None, "cal2": None, "cal3": None, "cal4": None,
         }
+        self._paths: Dict[str, str] = {}
 
     def load(self, key: str, filepath: str | Path) -> S2PData:
         """Load a calibration file.  Raises on parse error."""
@@ -42,8 +43,12 @@ class CalibrationService(QObject):
             raise KeyError(f"Unknown calibration key: {key}")
         data = parse_s2p(filepath)
         self._data[key] = data
+        self._paths[key] = str(filepath)
         self.calibration_changed.emit()
         return data
+
+    def get_loaded_path(self, key: str) -> Optional[str]:
+        return self._paths.get(key)
 
     def get_data(self, key: str) -> Optional[S2PData]:
         return self._data.get(key)

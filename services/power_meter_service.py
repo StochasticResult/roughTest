@@ -127,12 +127,10 @@ class _MeterPoller(QObject):
                         value_w = meas_val.value
                         if value_w > 0:
                             value_dbm = 10.0 * math.log10(value_w) + 30.0
-                            ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-                            self.reading_ready.emit(value_dbm, ts)
                         else:
-                            # It's returning 0 or negative W, probably just noise floor
-                            # Don't overwrite a good reading with -200 if it's just intermittent zero
-                            pass
+                            value_dbm = -200.0
+                        ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+                        self.reading_ready.emit(value_dbm, ts)
                     else:
                         self.status_changed.emit(f"NRP Read error code: {stat}")
                 else:
@@ -140,10 +138,10 @@ class _MeterPoller(QObject):
                     value_w = float(raw)
                     if value_w > 0:
                         value_dbm = 10.0 * math.log10(value_w) + 30.0
-                        ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-                        self.reading_ready.emit(value_dbm, ts)
                     else:
-                        pass
+                        value_dbm = -200.0
+                    ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+                    self.reading_ready.emit(value_dbm, ts)
             except Exception as exc:
                 self.error_occurred.emit(str(exc))
                 self.status_changed.emit(f"Read error: {exc}")

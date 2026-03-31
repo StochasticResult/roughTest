@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional
 
 from PySide6.QtWidgets import (
     QFileDialog,
@@ -67,7 +67,9 @@ class _CalFileRow(QWidget):
         )
         if not path:
             return
+        self.load_from_path(path)
 
+    def load_from_path(self, path: str) -> None:
         try:
             self._cal.load(self._key, path)
             self._status.setText("Loaded")
@@ -93,6 +95,13 @@ class CalibrationPanel(QGroupBox):
         layout = QVBoxLayout(self)
         layout.setSpacing(8)
 
+        self._rows: Dict[str, _CalFileRow] = {}
+
         for key, desc in CalibrationService.CAL_LABELS.items():
             row = _CalFileRow(key, desc, cal_service, self)
+            self._rows[key] = row
             layout.addWidget(row)
+            
+    def load_cal_file(self, key: str, path: str) -> None:
+        if key in self._rows:
+            self._rows[key].load_from_path(path)

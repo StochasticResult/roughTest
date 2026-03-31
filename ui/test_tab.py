@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import List, Optional
 
-from PySide6.QtCore import Qt, Slot
+from PySide6.QtCore import Qt, Slot, QTimer, QSettings
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -78,9 +78,15 @@ class TestTab(QWidget):
         self._output_ts = ""
         self._session_rows: List[ResultRow] = []
 
+        self._auto_level_timer = QTimer(self)
+        self._auto_level_timer.timeout.connect(self._auto_level_step)
+        self._auto_level_active = False
+        self._auto_level_last_sg_power = None
+        self._auto_level_last_act_out = None
+
         self._build_ui()
         self._connect_signals()
-        self._enable_manual_mode_defaults()
+        # self._enable_manual_mode_defaults()
 
     def _build_ui(self) -> None:
         main_layout = QVBoxLayout(self)
@@ -155,7 +161,16 @@ class TestTab(QWidget):
         
         self._target_error_label = QLabel("---")
         self._target_error_label.setObjectName("offset_val")
-        lay.addRow("Target Error:", self._target_error_label)
+        
+        self._btn_auto_level = QPushButton("Auto Level")
+        self._btn_auto_level.setCheckable(True)
+        
+        row_lay = QHBoxLayout()
+        row_lay.addWidget(self._target_error_label)
+        row_lay.addStretch()
+        row_lay.addWidget(self._btn_auto_level)
+        
+        lay.addRow("Target Error:", row_lay)
 
         return grp
 
@@ -422,7 +437,11 @@ class TestTab(QWidget):
         self._pm.output_status.connect(self.on_output_status)
 
         self._btn_sg_set_power.clicked.connect(self._on_sg_set_power)
+        # Make pressing Enter in the power input behave identically to clicking "Set Power"
+        self._sg_power_input.lineEdit().returnPressed.connect(self._btn_sg_set_power.animateClick)
+        
         self._btn_sg_rf.toggled.connect(self._on_sg_rf_toggled)
+        self._btn_auto_level.toggled.connect(self._on_auto_level_toggled)
 
         self._btn_save.clicked.connect(self._save_row)
         self._btn_copy_row.clicked.connect(self._copy_current_row)
@@ -540,6 +559,72 @@ class TestTab(QWidget):
     def _on_sg_rf_toggled(self, checked: bool) -> None:
         self._siggen.set_rf_state(checked)
 
+    @Slot(bool)
+    def _on_auto_level_toggled(self, checked: bool) -> None:
+        if checked:
+            self._auto_level_active = True
+            self._auto_level_last_sg_power = None
+            self._auto_level_last_act_out = None
+            self._btn_auto_level.setText("Stop Auto Level")
+            self._auto_level_step() # Trigger first step immediately
+            self._auto_level_timer.start(1500) # Wait 1.5s between steps
+        else:
+            self._auto_level_active = False
+            self._btn_auto_level.setText("Auto Level")
+            self._auto_level_timer.stop()
+
+    @Slot()
+    def _auto_level_step(self) -> None:
+        if not self._auto_level_active:
+            return
+            
+        row = self._build_current_row()
+        if not row or row.actual_output_power_dbm is None:
+            self._btn_auto_level.setChecked(False)
+            QMessageBox.warning(self, "Auto Level", "Cannot read actual output power. Auto level stopped.")
+            return
+            
+        act_out = row.actual_output_power_dbm
+        target = self._target_input.value()
+        error = target - act_out
+        
+        if abs(error) <= 0.04:
+            self._btn_auto_level.setChecked(False)
+            return
+            
+        current_sg_power = self._sg_power_input.value()
+        
+        if self._auto_level_last_sg_power is not None and self._auto_level_last_act_out is not None:
+            delta_sg = current_sg_power - self._auto_level_last_sg_power
+            delta_out = act_out - self._auto_level_last_act_out
+            
+            if delta_sg > 0.01: 
+                if (delta_out / delta_sg) < 0.2:
+                    self._sg_power_input.setValue(self._auto_level_last_sg_power)
+                    self._siggen.set_power(self._auto_level_last_sg_power)
+                    self._btn_auto_level.setChecked(False)
+                    QMessageBox.warning(self, "Auto Level", "Amplifier saturated! Reverted to previous state.")
+                    return
+        
+        # Calculate step but limit the maximum step size for safety
+        step = error
+        if step > 2.0:
+            step = 2.0
+        elif step < -2.0:
+            step = -2.0
+            
+        next_power = current_sg_power + step
+        next_power = max(-140.0, min(30.0, next_power))
+        
+        # Round to 2 decimal places to avoid floating point weirdness
+        next_power = round(next_power, 2)
+        
+        self._auto_level_last_sg_power = current_sg_power
+        self._auto_level_last_act_out = act_out
+        
+        self._sg_power_input.setValue(next_power)
+        self._siggen.set_power(next_power)
+
     @Slot(float, str)
     def on_input_reading(self, value: float, ts: str) -> None:
         if self._input_manual_check.isChecked():
@@ -601,6 +686,39 @@ class TestTab(QWidget):
         for freq_lbl, val_lbl in self._offset_labels.values():
             freq_lbl.setText("---")
             val_lbl.setText("---")
+
+    def restore_settings(self, settings: QSettings, prefix: str) -> None:
+        freq_str = settings.value(f"{prefix}_freq")
+        if freq_str is not None:
+            try:
+                freq = float(freq_str)
+                if freq >= 0.001:
+                    self._freq_input.blockSignals(True)
+                    self._freq_input.setValue(freq)
+                    self._freq_input.blockSignals(False)
+                    self._current_freq_ghz = freq
+                    self._update_offsets()
+                    self._recompute()
+            except (ValueError, TypeError):
+                pass
+
+        target_str = settings.value(f"{prefix}_target")
+        if target_str is not None:
+            try:
+                target = float(target_str)
+                self._target_input.setValue(target)
+            except (ValueError, TypeError):
+                pass
+
+        sync_str = settings.value(f"{prefix}_sync")
+        if sync_str is not None:
+            sync = sync_str == "true" or sync_str is True
+            self._sg_sync_check.setChecked(sync)
+
+    def save_settings(self, settings: QSettings, prefix: str) -> None:
+        settings.setValue(f"{prefix}_freq", self._freq_input.value())
+        settings.setValue(f"{prefix}_target", self._target_input.value())
+        settings.setValue(f"{prefix}_sync", self._sg_sync_check.isChecked())
 
     def _recompute(self) -> None:
         c = self._calc

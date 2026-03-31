@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Optional
 
+from PySide6.QtCore import QSettings
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -44,13 +45,17 @@ class MainWindow(QMainWindow):
         # Initialize the Power Meter Service
         self._pm_service = PowerMeterService(simulate=simulate_meters, parent=self)
 
+        self._build_ui()
+        
+        self._restore_settings()
+        
         # Connect to the hardcoded Signal Generator resource automatically
+        # Do this after UI is built so tabs can catch the status signals
         self._siggen_service.connect_device('USB0::0x0AAD::0x0054::180703::INSTR')
         
         # Start looking for meters in the background
+        # Move this after UI is built so that TestTabs can receive the initial status signals!
         self._pm_service.connect_meters()
-
-        self._build_ui()
 
     def _build_ui(self) -> None:
         central = QWidget()
@@ -123,3 +128,32 @@ class MainWindow(QMainWindow):
         else:
             self._sidebar.show()
             self._btn_toggle_sidebar.setText("◀ Hide Calibration")
+
+    def _restore_settings(self) -> None:
+        settings = QSettings("RFLambda", "TestAssistant")
+        
+        geom = settings.value("geometry")
+        if geom:
+            self.restoreGeometry(geom)
+            
+        for key in ["cal1", "cal2", "cal3", "cal4"]:
+            path = settings.value(f"cal_{key}")
+            if path:
+                self._cal_panel.load_cal_file(key, str(path))
+                
+        self._small_tab.restore_settings(settings, "small")
+        self._large_tab.restore_settings(settings, "large")
+
+    def closeEvent(self, event) -> None:
+        settings = QSettings("RFLambda", "TestAssistant")
+        settings.setValue("geometry", self.saveGeometry())
+        
+        for key in ["cal1", "cal2", "cal3", "cal4"]:
+            path = self._cal_service.get_loaded_path(key)
+            if path:
+                settings.setValue(f"cal_{key}", path)
+                
+        self._small_tab.save_settings(settings, "small")
+        self._large_tab.save_settings(settings, "large")
+        
+        event.accept()
