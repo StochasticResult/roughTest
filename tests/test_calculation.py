@@ -41,20 +41,20 @@ class TestActualOutputPower:
             output_meter_dbm=20.0,
             cal3_offset_db=-1.5,
         )
-        # 20.0 - (-1.5) = 21.5
-        assert result == pytest.approx(21.5)
+        # 20.0 + (-1.5) = 18.5
+        assert result == pytest.approx(18.5)
 
     def test_positive_offset(self, calc):
         result = calc.actual_output_power(15.0, 0.8)
-        # 15.0 - 0.8 = 14.2
-        assert result == pytest.approx(14.2)
+        # 15.0 + 0.8 = 15.8
+        assert result == pytest.approx(15.8)
 
 
 class TestActualSpurHarmonic:
     def test_basic(self, calc):
         result = calc.actual_spur_or_harmonic(-45.0, -2.0)
-        # -45.0 - (-2.0) = -43.0
-        assert result == pytest.approx(-43.0)
+        # -45.0 + (-2.0) = -47.0
+        assert result == pytest.approx(-47.0)
 
 
 class TestGain:

@@ -49,10 +49,6 @@ class MainWindow(QMainWindow):
         
         self._restore_settings()
         
-        # Connect to the hardcoded Signal Generator resource automatically
-        # Do this after UI is built so tabs can catch the status signals
-        self._siggen_service.connect_device('USB0::0x0AAD::0x0054::180703::INSTR')
-        
         # Start looking for meters in the background
         # Move this after UI is built so that TestTabs can receive the initial status signals!
         self._pm_service.connect_meters()
@@ -103,6 +99,8 @@ class MainWindow(QMainWindow):
         self._large_tab = TestTab("large_signal", self._cal_service, self._siggen_service, self._pm_service)
         self._tabs.addTab(self._small_tab, "Small Signal")
         self._tabs.addTab(self._large_tab, "Large Signal")
+        self._siggen_service.resource_discovered.connect(self._small_tab.set_siggen_resource_string)
+        self._siggen_service.resource_discovered.connect(self._large_tab.set_siggen_resource_string)
         workspace.addWidget(self._tabs, 1)
         root.addLayout(workspace, 1)
 
@@ -144,6 +142,11 @@ class MainWindow(QMainWindow):
         self._small_tab.restore_settings(settings, "small")
         self._large_tab.restore_settings(settings, "large")
 
+        visa = self._small_tab.siggen_resource_string()
+        if not visa:
+            visa = "USB0::0x0AAD::0x0054::181367::INSTR"
+        self._siggen_service.connect_device(visa)
+
     def closeEvent(self, event) -> None:
         settings = QSettings("RFLambda", "TestAssistant")
         settings.setValue("geometry", self.saveGeometry())
@@ -155,5 +158,7 @@ class MainWindow(QMainWindow):
                 
         self._small_tab.save_settings(settings, "small")
         self._large_tab.save_settings(settings, "large")
-        
+
+        self._siggen_service.disconnect_device()
+
         event.accept()

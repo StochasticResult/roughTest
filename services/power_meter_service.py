@@ -16,8 +16,9 @@ from typing import Optional
 
 from PySide6.QtCore import QObject, QThread, Signal, Slot
 
-INPUT_METER_SERIAL = "102073"
-OUTPUT_METER_SERIAL = "101823"
+# USB 探头序列号（与 VISA / Windows 设备字符串中一致）
+INPUT_METER_SERIAL = "101874"
+OUTPUT_METER_SERIAL = "102918"
 
 
 @dataclass
@@ -55,6 +56,50 @@ class _MeterPoller(QObject):
         self._is_nrp_dll = False
         self._nrp_session = None
         self._nrp_dll = None
+        self._dll_error_count = 0
+        self._dll_error_threshold = 3
+
+    def _normalize_pyvisa_resource(self, resource: str) -> str:
+        res = resource.strip()
+        if res.startswith("USB::"):
+            res = res.replace("USB::", "USB0::", 1)
+        if res.upper().startswith("USB0::") and "::INSTR" not in res.upper():
+            res = f"{res}::INSTR"
+        return res
+
+    def _connect_via_pyvisa(self) -> bool:
+        try:
+            import pyvisa
+
+            rm = pyvisa.ResourceManager()
+            resource = self._normalize_pyvisa_resource(self._resource or "")
+            self._instrument = rm.open_resource(resource)
+            self._instrument.timeout = 3000
+            idn = self._instrument.query("*IDN?").strip()
+            self.status_changed.emit(f"Connected: {idn}")
+            try:
+                self._instrument.write("INIT:CONT ON")
+            except Exception:
+                pass
+            return True
+        except Exception as exc:
+            self.status_changed.emit(f"Connection failed: {exc}")
+            self.error_occurred.emit(str(exc))
+            return False
+
+    def _close_nrp_dll_session(self) -> None:
+        if self._is_nrp_dll and self._nrp_session:
+            try:
+                self._nrp_dll.rsnrpz_close(self._nrp_session)
+            except Exception:
+                pass
+        self._is_nrp_dll = False
+        self._nrp_session = None
+
+    def _switch_from_dll_to_pyvisa(self) -> bool:
+        self._close_nrp_dll_session()
+        self.status_changed.emit("NRP DLL unstable, switching to VISA...")
+        return self._connect_via_pyvisa()
 
     @Slot()
     def start(self) -> None:
@@ -87,6 +132,7 @@ class _MeterPoller(QObject):
                 if status == 0:
                     self._nrp_session = session
                     self._is_nrp_dll = True
+                    self._dll_error_count = 0
                     self.status_changed.emit("Connected (NRP DLL)")
                     self._poll_real()
                     return
@@ -94,20 +140,7 @@ class _MeterPoller(QObject):
                 print(f"Failed to init rsnrpz_64.dll: {e}")
 
         # Fallback to standard PyVISA
-        try:
-            import pyvisa
-            rm = pyvisa.ResourceManager()
-            self._instrument = rm.open_resource(self._resource)
-            self._instrument.timeout = 3000
-            idn = self._instrument.query("*IDN?").strip()
-            self.status_changed.emit(f"Connected: {idn}")
-            try:
-                self._instrument.write("INIT:CONT ON")
-            except Exception:
-                pass
-        except Exception as exc:
-            self.status_changed.emit(f"Connection failed: {exc}")
-            self.error_occurred.emit(str(exc))
+        if not self._connect_via_pyvisa():
             return
 
         self._poll_real()
@@ -124,6 +157,7 @@ class _MeterPoller(QObject):
                         self._nrp_session, 1, 5000, ctypes.byref(meas_val)
                     )
                     if stat == 0:
+                        self._dll_error_count = 0
                         value_w = meas_val.value
                         if value_w > 0:
                             value_dbm = 10.0 * math.log10(value_w) + 30.0
@@ -132,7 +166,12 @@ class _MeterPoller(QObject):
                         ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
                         self.reading_ready.emit(value_dbm, ts)
                     else:
-                        self.status_changed.emit(f"NRP Read error code: {stat}")
+                        self._dll_error_count += 1
+                        self.status_changed.emit(f"NRP Read warning ({self._dll_error_count}): {stat}")
+                        if self._dll_error_count >= self._dll_error_threshold:
+                            if not self._switch_from_dll_to_pyvisa():
+                                self._running = False
+                                break
                 else:
                     raw = self._instrument.query("FETCH?").strip()
                     value_w = float(raw)
@@ -148,10 +187,7 @@ class _MeterPoller(QObject):
             QThread.msleep(int(self._poll_interval * 1000))
 
         if self._is_nrp_dll and self._nrp_session:
-            try:
-                self._nrp_dll.rsnrpz_close(self._nrp_session)
-            except Exception:
-                pass
+            self._close_nrp_dll_session()
         elif self._instrument:
             try:
                 self._instrument.close()

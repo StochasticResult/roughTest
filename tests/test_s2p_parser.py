@@ -69,7 +69,7 @@ class TestParseDB:
     def test_s12_values(self):
         data = parse_s2p(_write_s2p(SAMPLE_DB))
         np.testing.assert_allclose(
-            data.s12_db, [-2.30, -3.45, -4.60, -5.75]
+            data.s12_db, [1.5, 1.8, 2.1, 2.4]
         )
 
     def test_freq_range(self):
@@ -84,31 +84,31 @@ class TestNearestFrequency:
         data = parse_s2p(_write_s2p(SAMPLE_DB))
         freq, s12 = data.find_nearest(8.0)
         assert freq == pytest.approx(8.0)
-        assert s12 == pytest.approx(-3.45)
+        assert s12 == pytest.approx(1.8)
 
     def test_nearest_below(self):
         data = parse_s2p(_write_s2p(SAMPLE_DB))
         freq, s12 = data.find_nearest(7.9)
         assert freq == pytest.approx(8.0)
-        assert s12 == pytest.approx(-3.45)
+        assert s12 == pytest.approx(1.8)
 
     def test_nearest_above(self):
         data = parse_s2p(_write_s2p(SAMPLE_DB))
         freq, s12 = data.find_nearest(11.5)
         assert freq == pytest.approx(12.0)
-        assert s12 == pytest.approx(-5.75)
+        assert s12 == pytest.approx(2.4)
 
     def test_below_range(self):
         data = parse_s2p(_write_s2p(SAMPLE_DB))
         freq, s12 = data.find_nearest(1.0)
         assert freq == pytest.approx(6.0)
-        assert s12 == pytest.approx(-2.30)
+        assert s12 == pytest.approx(1.5)
 
     def test_above_range(self):
         data = parse_s2p(_write_s2p(SAMPLE_DB))
         freq, s12 = data.find_nearest(20.0)
         assert freq == pytest.approx(12.0)
-        assert s12 == pytest.approx(-5.75)
+        assert s12 == pytest.approx(2.4)
 
     def test_midpoint_prefers_lower_index(self):
         data = parse_s2p(_write_s2p(SAMPLE_DB))
@@ -120,36 +120,33 @@ class TestParseMHz:
     def test_mhz_units(self):
         data = parse_s2p(_write_s2p(SAMPLE_MA))
         assert data.freq_unit == "MHZ"
-        assert data.data_format == "MA"
+        assert data.data_format == "DB"
         np.testing.assert_allclose(data.frequencies_ghz, [6.0, 8.0])
 
-    def test_ma_to_db_conversion(self):
+    def test_column4_is_used_directly(self):
         data = parse_s2p(_write_s2p(SAMPLE_MA))
-        expected_6 = 20.0 * math.log10(0.750)
-        expected_8 = 20.0 * math.log10(0.650)
-        assert data.s12_db[0] == pytest.approx(expected_6, abs=0.01)
-        assert data.s12_db[1] == pytest.approx(expected_8, abs=0.01)
+        # Fixed rule: column 4 is calibration value.
+        assert data.s12_db[0] == pytest.approx(0.8, abs=0.01)
+        assert data.s12_db[1] == pytest.approx(0.8, abs=0.01)
 
 
 class TestParseRI:
-    def test_ri_to_db(self):
+    def test_column4_for_ri_file(self):
         data = parse_s2p(_write_s2p(SAMPLE_RI))
-        mag = math.sqrt(0.6**2 + 0.3**2)
-        expected = 20.0 * math.log10(mag)
-        assert data.s12_db[0] == pytest.approx(expected, abs=0.01)
+        assert data.s12_db[0] == pytest.approx(0.7, abs=0.01)
 
 
 class TestParseSimpleCal:
     def test_reads_frequency_and_loss_columns(self):
         data = parse_s2p(_write_s2p(SAMPLE_CAL))
         np.testing.assert_allclose(data.frequencies_ghz, [6.0, 8.0, 10.0])
-        np.testing.assert_allclose(data.s12_db, [-2.30, -3.45, -4.60])
+        np.testing.assert_allclose(data.s12_db, [2.30, 3.45, 4.60])
 
     def test_nearest_lookup_for_simple_cal(self):
         data = parse_s2p(_write_s2p(SAMPLE_CAL))
         freq, loss = data.find_nearest(8.2)
         assert freq == pytest.approx(8.0)
-        assert loss == pytest.approx(-3.45)
+        assert loss == pytest.approx(3.45)
 
 
 class TestErrors:

@@ -1,11 +1,11 @@
 """Calibration file parser.
 
-Supports:
-- Touchstone `.s2p` files by extracting `S12`
-- Simple calibration files where column 1 is frequency and column 4 is loss
+For this project, calibration values are always taken from:
+- column 1: frequency
+- column 4: loss/offset in dB
 
-Provides nearest-frequency lookup and handles HZ / KHZ / MHZ / GHZ
-frequency units plus DB / MA / RI data formats for Touchstone files.
+Header option lines (e.g. ``# HZ ...``) are still used only to
+determine frequency unit conversion.
 """
 
 from __future__ import annotations
@@ -68,11 +68,10 @@ def parse_s2p(filepath: str | Path) -> S2PData:
         raise FileNotFoundError(f"File not found: {filepath}")
 
     freq_unit = "GHZ"
-    data_format = "MA"
+    data_format = "DB"
 
     raw_freqs: list[float] = []
     raw_s12_vals: list[Tuple[float, float]] = []
-    simple_cal_mode = True
 
     with open(filepath, "r", encoding="utf-8", errors="replace") as fh:
         for line in fh:
@@ -81,37 +80,25 @@ def parse_s2p(filepath: str | Path) -> S2PData:
                 continue
 
             if line.startswith("#"):
-                freq_unit, data_format = _parse_option_line(line)
-                simple_cal_mode = False
+                freq_unit, _ = _parse_option_line(line)
                 continue
 
             parts = line.split()
             if not parts:
                 continue
 
-            # Touchstone v1 2-port: 9 values per frequency point
-            # freq S11_1 S11_2 S21_1 S21_2 S12_1 S12_2 S22_1 S22_2
             try:
                 vals = [float(v) for v in parts]
             except ValueError:
                 continue
 
-            if simple_cal_mode and len(vals) >= 4:
+            # Project rule: always use the 4th column as calibration value.
+            if len(vals) >= 4:
                 raw_freqs.append(vals[0])
                 raw_s12_vals.append((vals[3], 0.0))
-            elif len(vals) >= 9:
-                raw_freqs.append(vals[0])
-                raw_s12_vals.append((vals[5], vals[6]))
-            elif len(vals) >= 7:
-                # Some files split across lines; this handles compact forms
-                raw_freqs.append(vals[0])
-                raw_s12_vals.append((vals[5], vals[6]))
 
     if not raw_freqs:
         raise ValueError(f"No valid data points found in {filepath}")
-
-    if simple_cal_mode:
-        data_format = "DB"
 
     multiplier = _FREQ_MULTIPLIER.get(freq_unit.upper(), 1e9)
     frequencies_hz = np.array(raw_freqs) * multiplier
@@ -150,7 +137,10 @@ def _convert_to_db(
 
     for i, (v1, v2) in enumerate(pairs):
         if data_format == "DB":
-            result[i] = v1
+            # Calibration files usually store loss as negative dB.
+            # Use positive magnitude globally so all downstream features
+            # (target error, auto level, export) share one consistent sign.
+            result[i] = abs(v1)
         elif data_format == "MA":
             mag = abs(v1)
             if mag > 0:
@@ -164,6 +154,6 @@ def _convert_to_db(
             else:
                 result[i] = -200.0
         else:
-            result[i] = v1  # fallback: treat as dB
+            result[i] = abs(v1)  # fallback: treat as dB magnitude
 
     return result

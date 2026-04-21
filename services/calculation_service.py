@@ -26,16 +26,16 @@ class CalculationService:
         output_meter_dbm: float,
         cal3_offset_db: float,
     ) -> float:
-        """Actual Output Power = Output Meter Reading − cal3_offset"""
-        return output_meter_dbm - cal3_offset_db
+        """Actual Output Power = Output Meter Reading + cal3_offset"""
+        return output_meter_dbm + cal3_offset_db
 
     @staticmethod
     def actual_spur_or_harmonic(
         analyzer_dbm: float,
         cal4_offset_db: float,
     ) -> float:
-        """Actual Spur/Harmonic = Analyzer Reading − cal4_offset"""
-        return analyzer_dbm - cal4_offset_db
+        """Actual Spur/Harmonic = Analyzer Reading + cal4_offset"""
+        return analyzer_dbm + cal4_offset_db
 
     @staticmethod
     def gain(

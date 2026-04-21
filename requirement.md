@@ -32,8 +32,8 @@ Important:
 
 Device I/O requirements:
 The software should automatically read two R&S power meters:
-- Output power meter: NRP-Z85, serial 101823
-- Input power meter: NRP-Z85, serial 102073
+- Output power meter: NRP-Z85, serial 102918
+- Input power meter: NRP-Z85, serial 101874
 
 Do not hardcode fragile assumptions if device discovery can be done robustly.
 Try to identify the connected meters by serial number and assign them correctly.

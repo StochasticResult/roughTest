@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QLineEdit,
     QMessageBox,
     QPushButton,
     QScrollArea,
@@ -40,6 +41,8 @@ COMMON_FREQS = [
     "6.0", "6.5", "7.0", "7.5", "8.0", "8.5",
     "9.0", "9.5", "10.0", "10.5", "11.0", "11.5", "12.0",
 ]
+
+_DEFAULT_SIGGEN_VISA = "USB0::0x0AAD::0x0054::181367::INSTR"
 
 _TABLE_HEADERS = [
     "Freq\nGHz", "In Raw\ndBm", "Out Raw\ndBm", "Analyzer\ndBm",
@@ -113,13 +116,13 @@ class TestTab(QWidget):
         col1.addWidget(self._build_siggen_section())
         col1.addWidget(self._build_offset_section())
         col1.addStretch()
-        dashboard.addLayout(col1, 35)
+        dashboard.addLayout(col1, 40)
 
         # Column 2: Raw Readings
         col2 = QVBoxLayout()
         col2.addWidget(self._build_readings_section())
         col2.addStretch()
-        dashboard.addLayout(col2, 35)
+        dashboard.addLayout(col2, 32)
 
         # Column 3: Live Results
         col3 = QVBoxLayout()
@@ -131,7 +134,7 @@ class TestTab(QWidget):
         col3.addWidget(self._btn_save)
         
         col3.addStretch()
-        dashboard.addLayout(col3, 30)
+        dashboard.addLayout(col3, 28)
 
         root.addLayout(dashboard, 0)
         root.addWidget(self._build_session_section(), 1)
@@ -176,34 +179,91 @@ class TestTab(QWidget):
 
     def _build_siggen_section(self) -> QGroupBox:
         grp = QGroupBox("Signal Generator")
-        lay = QFormLayout(grp)
-        lay.setSpacing(10)
+        root = QVBoxLayout(grp)
+        root.setSpacing(10)
+        root.setContentsMargins(12, 16, 12, 12)
 
+        status_row = QHBoxLayout()
+        status_row.setSpacing(8)
+        st_lbl = QLabel("Status:")
+        st_lbl.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        status_row.addWidget(st_lbl)
         self._sg_status = QLabel("Disconnected")
         self._sg_status.setObjectName("status_warn")
-        lay.addRow("Status:", self._sg_status)
+        self._sg_status.setWordWrap(True)
+        self._sg_status.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self._sg_status.setMinimumWidth(120)
+        status_row.addWidget(self._sg_status, 1)
+        root.addLayout(status_row)
 
-        self._sg_sync_check = QCheckBox("Sync Test Freq to SigGen")
-        self._sg_sync_check.setChecked(True)
-        lay.addRow("", self._sg_sync_check)
+        visa_cap = QLabel("VISA / resource")
+        visa_cap.setObjectName("metric_title")
+        root.addWidget(visa_cap)
+        self._sg_resource_edit = QLineEdit()
+        self._sg_resource_edit.setPlaceholderText("USB0::...::INSTR")
+        self._sg_resource_edit.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
+        self._sg_resource_edit.setMinimumHeight(28)
+        root.addWidget(self._sg_resource_edit)
 
-        power_lay = QHBoxLayout()
+        conn_row = QHBoxLayout()
+        conn_row.setSpacing(8)
+        self._btn_sg_connect = QPushButton("Connect")
+        self._btn_sg_disconnect = QPushButton("Disconnect")
+        for b in (self._btn_sg_connect, self._btn_sg_disconnect):
+            b.setMinimumWidth(96)
+            b.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        conn_row.addWidget(self._btn_sg_connect)
+        conn_row.addWidget(self._btn_sg_disconnect)
+        conn_row.addStretch(1)
+        root.addLayout(conn_row)
+
+        self._sg_sync_check = QCheckBox("Auto-push test frequency to SigGen (when changed)")
+        self._sg_sync_check.setChecked(False)
+        self._sg_sync_check.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+        )
+        root.addWidget(self._sg_sync_check)
+
+        power_row = QHBoxLayout()
+        power_row.setSpacing(8)
+        power_row.addWidget(QLabel("Power (dBm):"))
         self._sg_power_input = QDoubleSpinBox()
         self._sg_power_input.setRange(-140, 30)
         self._sg_power_input.setDecimals(2)
         self._sg_power_input.setSingleStep(1.0)
         self._sg_power_input.setKeyboardTracking(False)  # Important to avoid fighting when typing
-        power_lay.addWidget(self._sg_power_input)
-
+        self._sg_power_input.setFixedWidth(118)
+        self._sg_power_input.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        power_row.addWidget(self._sg_power_input)
         self._btn_sg_set_power = QPushButton("Set Power")
-        power_lay.addWidget(self._btn_sg_set_power)
-        lay.addRow("Power (dBm):", power_lay)
+        self._btn_sg_set_power.setMinimumWidth(96)
+        self._btn_sg_set_power.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        power_row.addWidget(self._btn_sg_set_power)
+        power_row.addStretch(1)
+        root.addLayout(power_row)
 
+        rf_row = QHBoxLayout()
+        rf_row.setSpacing(8)
+        rf_row.addWidget(QLabel("RF output:"))
         self._btn_sg_rf = QPushButton("RF OFF")
         self._btn_sg_rf.setCheckable(True)
         self._btn_sg_rf.setObjectName("accent")
-        lay.addRow("RF State:", self._btn_sg_rf)
-        
+        self._btn_sg_rf.setMinimumWidth(120)
+        self._btn_sg_rf.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        rf_row.addWidget(self._btn_sg_rf)
+        rf_row.addStretch(1)
+        root.addLayout(rf_row)
+
+        self._btn_sg_release_local = QPushButton("Release panel (Local)")
+        self._btn_sg_release_local.setToolTip("可选：SCPI 将仪器切到前面板 Local。")
+        self._btn_sg_release_local.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
+        self._btn_sg_release_local.setMinimumHeight(30)
+        root.addWidget(self._btn_sg_release_local)
+
         return grp
 
     def _build_offset_section(self) -> QGroupBox:
@@ -441,6 +501,9 @@ class TestTab(QWidget):
         self._sg_power_input.lineEdit().returnPressed.connect(self._btn_sg_set_power.animateClick)
         
         self._btn_sg_rf.toggled.connect(self._on_sg_rf_toggled)
+        self._btn_sg_release_local.clicked.connect(self._siggen.release_to_local_panel)
+        self._btn_sg_connect.clicked.connect(self._on_sg_connect)
+        self._btn_sg_disconnect.clicked.connect(self._on_sg_disconnect)
         self._btn_auto_level.toggled.connect(self._on_auto_level_toggled)
 
         self._btn_save.clicked.connect(self._save_row)
@@ -524,6 +587,28 @@ class TestTab(QWidget):
             self._output_ts_label.setText(f"Last Update: {self._output_ts}")
             self._recompute()
 
+    def siggen_resource_string(self) -> str:
+        return self._sg_resource_edit.text().strip()
+
+    def set_siggen_resource_string(self, visa: str) -> None:
+        self._sg_resource_edit.setText(visa)
+
+    @Slot()
+    def _on_sg_connect(self) -> None:
+        text = self.siggen_resource_string()
+        if not text:
+            QMessageBox.warning(
+                self,
+                "Signal Generator",
+                "Please enter a VISA resource string (e.g. USB0::...::INSTR).",
+            )
+            return
+        self._siggen.connect_device(text)
+
+    @Slot()
+    def _on_sg_disconnect(self) -> None:
+        self._siggen.disconnect_device()
+
     @Slot(str)
     def _on_sg_status(self, status: str) -> None:
         self._sg_status.setText(status)
@@ -538,8 +623,10 @@ class TestTab(QWidget):
     @Slot(float, float, bool)
     def _on_sg_state(self, freq_ghz: float, power_dbm: float, rf_on: bool) -> None:
         state_text = "ON" if rf_on else "OFF"
+        self._btn_sg_rf.blockSignals(True)
         self._btn_sg_rf.setText(f"RF {state_text}")
         self._btn_sg_rf.setChecked(rf_on)
+        self._btn_sg_rf.blockSignals(False)
         
         # Only update the spinbox if it's not currently focused by the user
         if not self._sg_power_input.hasFocus():
@@ -567,7 +654,7 @@ class TestTab(QWidget):
             self._auto_level_last_act_out = None
             self._btn_auto_level.setText("Stop Auto Level")
             self._auto_level_step() # Trigger first step immediately
-            self._auto_level_timer.start(1500) # Wait 1.5s between steps
+            self._auto_level_timer.start(1000) # Wait 1.0s between steps for faster convergence
         else:
             self._auto_level_active = False
             self._btn_auto_level.setText("Auto Level")
@@ -593,25 +680,36 @@ class TestTab(QWidget):
             return
             
         current_sg_power = self._sg_power_input.value()
+        step = error
         
         if self._auto_level_last_sg_power is not None and self._auto_level_last_act_out is not None:
             delta_sg = current_sg_power - self._auto_level_last_sg_power
             delta_out = act_out - self._auto_level_last_act_out
             
-            if delta_sg > 0.01: 
-                if (delta_out / delta_sg) < 0.2:
-                    self._sg_power_input.setValue(self._auto_level_last_sg_power)
-                    self._siggen.set_power(self._auto_level_last_sg_power)
-                    self._btn_auto_level.setChecked(False)
-                    QMessageBox.warning(self, "Auto Level", "Amplifier saturated! Reverted to previous state.")
-                    return
+            # 只有在 12 GHz 时，并且单次步长足够大（> 0.5 dBm）才去检测饱和，防止仪器读数跳动产生误判
+            if self._current_freq_ghz is not None and self._current_freq_ghz >= 11.9:
+                if delta_sg > 0.5: 
+                    if (delta_out / delta_sg) < 0.15:
+                        self._sg_power_input.setValue(self._auto_level_last_sg_power)
+                        self._siggen.set_power(self._auto_level_last_sg_power)
+                        self._btn_auto_level.setChecked(False)
+                        QMessageBox.warning(self, "Auto Level", "Amplifier saturated at high frequency! Reverted to previous state.")
+                        return
+
+            # 聪明步长预测 (Secant Method / 割线法)
+            if abs(delta_sg) >= 0.1:
+                slope = delta_out / delta_sg
+                # 只有当 slope 在放大器的合理物理范围内（比如 0.2 到 2.0）才信任它
+                # 如果目前处于增益压缩区（比如 slope=0.5），直接用 error 可能会达不到 target
+                # 使用 error / slope 会自动将输入步长放大（变成2倍），从而更大概率一步到位
+                if 0.2 <= slope <= 2.0:
+                    step = error / slope
         
-        # Calculate step but limit the maximum step size for safety
-        step = error
-        if step > 2.0:
-            step = 2.0
-        elif step < -2.0:
-            step = -2.0
+        # 限制最大跨度，允许最大 5 dB 的跳变以实现极速逼近
+        if step > 5.0:
+            step = 5.0
+        elif step < -5.0:
+            step = -5.0
             
         next_power = current_sg_power + step
         next_power = max(-140.0, min(30.0, next_power))
@@ -715,10 +813,15 @@ class TestTab(QWidget):
             sync = sync_str == "true" or sync_str is True
             self._sg_sync_check.setChecked(sync)
 
+        visa = settings.value("siggen_visa_resource", _DEFAULT_SIGGEN_VISA)
+        self._sg_resource_edit.setText(str(visa))
+
     def save_settings(self, settings: QSettings, prefix: str) -> None:
         settings.setValue(f"{prefix}_freq", self._freq_input.value())
         settings.setValue(f"{prefix}_target", self._target_input.value())
         settings.setValue(f"{prefix}_sync", self._sg_sync_check.isChecked())
+        # 两个标签页各有一份输入框；后保存的覆盖前者，便于只在 Large 页改地址也能落盘。
+        settings.setValue("siggen_visa_resource", self._sg_resource_edit.text().strip())
 
     def _recompute(self) -> None:
         c = self._calc
@@ -761,7 +864,9 @@ class TestTab(QWidget):
 
         target = self._target_input.value()
         if act_out is not None:
-            err = act_out - target
+            # Keep display sign consistent with auto-level control logic:
+            # positive => still below target and needs to increase.
+            err = target - act_out
             self._target_error_label.setText(f"{err:+.2f} dB")
             color = "#a6e3a1" if abs(err) < 0.5 else "#f38ba8"
             self._target_error_label.setStyleSheet(
