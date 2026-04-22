@@ -40,7 +40,7 @@ class MainWindow(QMainWindow):
         self.setStyleSheet(LIGHT_STYLESHEET)
 
         self._cal_service = CalibrationService(self)
-        self._siggen_service = SigGenService(self)
+        self._siggen_service = SigGenService(self, simulate=simulate_meters)
         
         # Initialize the Power Meter Service
         self._pm_service = PowerMeterService(simulate=simulate_meters, parent=self)
@@ -159,6 +159,8 @@ class MainWindow(QMainWindow):
         self._small_tab.save_settings(settings, "small")
         self._large_tab.save_settings(settings, "large")
 
+        # Ensure meter polling threads are fully released on window close.
+        self._pm_service.stop()
         self._siggen_service.disconnect_device()
 
         event.accept()

@@ -86,6 +86,7 @@ class TestTab(QWidget):
         self._auto_level_active = False
         self._auto_level_last_sg_power = None
         self._auto_level_last_act_out = None
+        self._sat_suspect_count = 0
 
         self._build_ui()
         self._connect_signals()
@@ -161,6 +162,13 @@ class TestTab(QWidget):
         self._target_input.setDecimals(2)
         self._target_input.setValue(0.0)
         lay.addRow("Target Out (dBm):", self._target_input)
+
+        self._auto_sg_max_input = QDoubleSpinBox()
+        self._auto_sg_max_input.setRange(-140.0, 30.0)
+        self._auto_sg_max_input.setDecimals(2)
+        self._auto_sg_max_input.setSingleStep(0.5)
+        self._auto_sg_max_input.setValue(30.0)
+        lay.addRow("Auto SG Max (dBm):", self._auto_sg_max_input)
         
         self._target_error_label = QLabel("---")
         self._target_error_label.setObjectName("offset_val")
@@ -341,6 +349,36 @@ class TestTab(QWidget):
         
         self._input_ts_label = QLabel("Last Update: ---")
         in_lay.addRow("", self._input_ts_label)
+
+        self._input_resource_combo = QComboBox()
+        self._input_resource_combo.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
+        self._btn_pm_refresh = QPushButton("Refresh Devices")
+        self._btn_pm_refresh.setToolTip("扫描当前电脑连接的 Power Meter（VISA/Windows 设备）。")
+        self._btn_pm_refresh.setMinimumWidth(130)
+        self._btn_pm_refresh.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        in_pick_row = QHBoxLayout()
+        in_pick_row.setSpacing(8)
+        in_pick_row.addWidget(self._input_resource_combo, 1)
+        in_pick_row.addWidget(self._btn_pm_refresh)
+        in_lay.addRow("Detected:", in_pick_row)
+
+        self._input_resource_edit = QLineEdit()
+        self._input_resource_edit.setPlaceholderText("USB0::...::INSTR  (or USB::0x0AAD::0x0083::SERIAL)")
+        in_lay.addRow("Resource:", self._input_resource_edit)
+
+        in_btn_row = QHBoxLayout()
+        in_btn_row.setSpacing(8)
+        self._btn_pm_input_connect = QPushButton("Connect")
+        self._btn_pm_input_disconnect = QPushButton("Disconnect")
+        for b in (self._btn_pm_input_connect, self._btn_pm_input_disconnect):
+            b.setMinimumWidth(96)
+            b.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        in_btn_row.addWidget(self._btn_pm_input_connect)
+        in_btn_row.addWidget(self._btn_pm_input_disconnect)
+        in_btn_row.addStretch(1)
+        in_lay.addRow("", in_btn_row)
         lay.addWidget(input_card)
 
         # Output Meter
@@ -375,6 +413,28 @@ class TestTab(QWidget):
         
         self._output_ts_label = QLabel("Last Update: ---")
         out_lay.addRow("", self._output_ts_label)
+
+        self._output_resource_combo = QComboBox()
+        self._output_resource_combo.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
+        out_lay.addRow("Detected:", self._output_resource_combo)
+
+        self._output_resource_edit = QLineEdit()
+        self._output_resource_edit.setPlaceholderText("USB0::...::INSTR  (or USB::0x0AAD::0x0083::SERIAL)")
+        out_lay.addRow("Resource:", self._output_resource_edit)
+
+        out_btn_row = QHBoxLayout()
+        out_btn_row.setSpacing(8)
+        self._btn_pm_output_connect = QPushButton("Connect")
+        self._btn_pm_output_disconnect = QPushButton("Disconnect")
+        for b in (self._btn_pm_output_connect, self._btn_pm_output_disconnect):
+            b.setMinimumWidth(96)
+            b.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        out_btn_row.addWidget(self._btn_pm_output_connect)
+        out_btn_row.addWidget(self._btn_pm_output_disconnect)
+        out_btn_row.addStretch(1)
+        out_lay.addRow("", out_btn_row)
         lay.addWidget(output_card)
 
         # Analyzer
@@ -505,6 +565,15 @@ class TestTab(QWidget):
         self._btn_sg_connect.clicked.connect(self._on_sg_connect)
         self._btn_sg_disconnect.clicked.connect(self._on_sg_disconnect)
         self._btn_auto_level.toggled.connect(self._on_auto_level_toggled)
+
+        self._btn_pm_input_connect.clicked.connect(self._on_pm_input_connect)
+        self._btn_pm_input_disconnect.clicked.connect(self._on_pm_input_disconnect)
+        self._btn_pm_output_connect.clicked.connect(self._on_pm_output_connect)
+        self._btn_pm_output_disconnect.clicked.connect(self._on_pm_output_disconnect)
+
+        self._btn_pm_refresh.clicked.connect(self._refresh_pm_resource_lists)
+        self._input_resource_combo.currentIndexChanged.connect(self._on_pm_input_combo_changed)
+        self._output_resource_combo.currentIndexChanged.connect(self._on_pm_output_combo_changed)
 
         self._btn_save.clicked.connect(self._save_row)
         self._btn_copy_row.clicked.connect(self._copy_current_row)
@@ -652,11 +721,13 @@ class TestTab(QWidget):
             self._auto_level_active = True
             self._auto_level_last_sg_power = None
             self._auto_level_last_act_out = None
+            self._sat_suspect_count = 0
             self._btn_auto_level.setText("Stop Auto Level")
             self._auto_level_step() # Trigger first step immediately
             self._auto_level_timer.start(1000) # Wait 1.0s between steps for faster convergence
         else:
             self._auto_level_active = False
+            self._sat_suspect_count = 0
             self._btn_auto_level.setText("Auto Level")
             self._auto_level_timer.stop()
 
@@ -685,16 +756,38 @@ class TestTab(QWidget):
         if self._auto_level_last_sg_power is not None and self._auto_level_last_act_out is not None:
             delta_sg = current_sg_power - self._auto_level_last_sg_power
             delta_out = act_out - self._auto_level_last_act_out
-            
-            # 只有在 12 GHz 时，并且单次步长足够大（> 0.5 dBm）才去检测饱和，防止仪器读数跳动产生误判
-            if self._current_freq_ghz is not None and self._current_freq_ghz >= 11.9:
-                if delta_sg > 0.5: 
-                    if (delta_out / delta_sg) < 0.15:
-                        self._sg_power_input.setValue(self._auto_level_last_sg_power)
-                        self._siggen.set_power(self._auto_level_last_sg_power)
-                        self._btn_auto_level.setChecked(False)
-                        QMessageBox.warning(self, "Auto Level", "Amplifier saturated at high frequency! Reverted to previous state.")
-                        return
+
+            # 全频段饱和保护（更稳健，避免误判）:
+            # - 仅在“正在往上推功率”且目标明显偏低时生效
+            # - 仅在步长足够大时检测，过滤读数噪声
+            # - 需要连续两次都表现出严重压缩才触发回退
+            if delta_sg > 0.35 and error > 0.5:
+                slope = delta_out / delta_sg
+                poor_slope = slope < 0.18
+                near_flat = delta_out < 0.08 and delta_sg >= 0.5
+                if poor_slope or near_flat:
+                    self._sat_suspect_count += 1
+                else:
+                    self._sat_suspect_count = 0
+
+                if self._sat_suspect_count >= 2:
+                    self._sat_suspect_count = 0
+                    self._sg_power_input.setValue(self._auto_level_last_sg_power)
+                    self._siggen.set_power(self._auto_level_last_sg_power)
+                    self._btn_auto_level.setChecked(False)
+                    freq_txt = (
+                        f"{self._current_freq_ghz:.2f} GHz"
+                        if self._current_freq_ghz is not None
+                        else "current frequency"
+                    )
+                    QMessageBox.warning(
+                        self,
+                        "Auto Level",
+                        f"Possible saturation detected at {freq_txt}. Reverted to previous SigGen power.",
+                    )
+                    return
+            else:
+                self._sat_suspect_count = 0
 
             # 聪明步长预测 (Secant Method / 割线法)
             if abs(delta_sg) >= 0.1:
@@ -712,7 +805,8 @@ class TestTab(QWidget):
             step = -5.0
             
         next_power = current_sg_power + step
-        next_power = max(-140.0, min(30.0, next_power))
+        auto_sg_max = self._auto_sg_max_input.value()
+        next_power = max(-140.0, min(auto_sg_max, next_power))
         
         # Round to 2 decimal places to avoid floating point weirdness
         next_power = round(next_power, 2)
@@ -813,15 +907,114 @@ class TestTab(QWidget):
             sync = sync_str == "true" or sync_str is True
             self._sg_sync_check.setChecked(sync)
 
+        auto_max_str = settings.value(f"{prefix}_auto_sg_max")
+        if auto_max_str is not None:
+            try:
+                auto_max = float(auto_max_str)
+                self._auto_sg_max_input.setValue(auto_max)
+            except (ValueError, TypeError):
+                pass
+
         visa = settings.value("siggen_visa_resource", _DEFAULT_SIGGEN_VISA)
         self._sg_resource_edit.setText(str(visa))
+
+        in_pm = settings.value(f"{prefix}_pm_input_resource")
+        if in_pm is not None:
+            self._input_resource_edit.setText(str(in_pm))
+        else:
+            cur = self._pm.input_resource()
+            if cur:
+                self._input_resource_edit.setText(cur)
+
+        out_pm = settings.value(f"{prefix}_pm_output_resource")
+        if out_pm is not None:
+            self._output_resource_edit.setText(str(out_pm))
+        else:
+            cur = self._pm.output_resource()
+            if cur:
+                self._output_resource_edit.setText(cur)
+
+        self._refresh_pm_resource_lists(select_current=True)
 
     def save_settings(self, settings: QSettings, prefix: str) -> None:
         settings.setValue(f"{prefix}_freq", self._freq_input.value())
         settings.setValue(f"{prefix}_target", self._target_input.value())
         settings.setValue(f"{prefix}_sync", self._sg_sync_check.isChecked())
+        settings.setValue(f"{prefix}_auto_sg_max", self._auto_sg_max_input.value())
         # 两个标签页各有一份输入框；后保存的覆盖前者，便于只在 Large 页改地址也能落盘。
         settings.setValue("siggen_visa_resource", self._sg_resource_edit.text().strip())
+
+        settings.setValue(
+            f"{prefix}_pm_input_resource",
+            self._input_resource_edit.text().strip(),
+        )
+        settings.setValue(
+            f"{prefix}_pm_output_resource",
+            self._output_resource_edit.text().strip(),
+        )
+
+    def _refresh_pm_resource_lists(self, select_current: bool = False) -> None:
+        scan = self._pm.scan_available_meter_resources()
+        candidates = list(scan.get("candidates", []))
+
+        def fill_combo(combo: QComboBox, current_text: str) -> None:
+            combo.blockSignals(True)
+            combo.clear()
+            combo.addItem("-- Select detected --", "")
+            for res in candidates:
+                combo.addItem(res, res)
+            if select_current and current_text:
+                idx = combo.findData(current_text)
+                if idx >= 0:
+                    combo.setCurrentIndex(idx)
+            combo.blockSignals(False)
+
+        fill_combo(self._input_resource_combo, self._input_resource_edit.text().strip())
+        fill_combo(self._output_resource_combo, self._output_resource_edit.text().strip())
+
+    @Slot(int)
+    def _on_pm_input_combo_changed(self, index: int) -> None:
+        val = self._input_resource_combo.currentData()
+        if isinstance(val, str) and val:
+            self._input_resource_edit.setText(val)
+
+    @Slot(int)
+    def _on_pm_output_combo_changed(self, index: int) -> None:
+        val = self._output_resource_combo.currentData()
+        if isinstance(val, str) and val:
+            self._output_resource_edit.setText(val)
+
+    @Slot()
+    def _on_pm_input_connect(self) -> None:
+        res = self._input_resource_edit.text().strip()
+        if not res:
+            QMessageBox.warning(
+                self,
+                "Power Meter (Input)",
+                "请输入 Input Power Meter 的连接 resource string。",
+            )
+            return
+        self._pm.reconnect_input_meter(res)
+
+    @Slot()
+    def _on_pm_input_disconnect(self) -> None:
+        self._pm.reconnect_input_meter(None)
+
+    @Slot()
+    def _on_pm_output_connect(self) -> None:
+        res = self._output_resource_edit.text().strip()
+        if not res:
+            QMessageBox.warning(
+                self,
+                "Power Meter (Output)",
+                "请输入 Output Power Meter 的连接 resource string。",
+            )
+            return
+        self._pm.reconnect_output_meter(res)
+
+    @Slot()
+    def _on_pm_output_disconnect(self) -> None:
+        self._pm.reconnect_output_meter(None)
 
     def _recompute(self) -> None:
         c = self._calc

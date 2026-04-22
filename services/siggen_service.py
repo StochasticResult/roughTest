@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import queue
+import re
 from typing import Optional
 
 from PySide6.QtCore import QObject, QThread, Signal, Slot
@@ -55,13 +56,24 @@ class _SigGenWorker(QObject):
     error_occurred = Signal(str)
     resource_resolved = Signal(str)  # 自动发现地址时发出，供界面更新输入框
 
-    def __init__(self, resource_string: str, poll_interval_s: float = 1.0) -> None:
+    def __init__(
+        self,
+        resource_string: str,
+        poll_interval_s: float = 1.0,
+        simulate: bool = False,
+    ) -> None:
         super().__init__()
         self._resource = resource_string
         self._poll_interval = poll_interval_s
+        self._simulate = simulate
         self._running = False
         self._instrument = None
         self._cmd_queue: queue.Queue[str] = queue.Queue()
+
+        # Simulation state
+        self._sim_freq_ghz = 6.0
+        self._sim_power_dbm = 0.0
+        self._sim_rf_on = False
 
     def _close_session(self, release_local: bool) -> None:
         inst = self._instrument
@@ -81,6 +93,23 @@ class _SigGenWorker(QObject):
     @Slot()
     def start(self) -> None:
         self._running = True
+
+        if self._simulate:
+            self.status_changed.emit("Simulation mode (SigGen)")
+            while self._running:
+                try:
+                    while not self._cmd_queue.empty():
+                        cmd = self._cmd_queue.get()
+                        self._apply_sim_command(cmd)
+                    self.state_ready.emit(
+                        float(self._sim_freq_ghz),
+                        float(self._sim_power_dbm),
+                        bool(self._sim_rf_on),
+                    )
+                except Exception as exc:
+                    self.error_occurred.emit(str(exc))
+                QThread.msleep(int(self._poll_interval * 1000))
+            return
 
         try:
             import pyvisa
@@ -195,6 +224,40 @@ class _SigGenWorker(QObject):
 
         self._close_session(release_local=True)
 
+    def _apply_sim_command(self, cmd: str) -> None:
+        c = (cmd or "").strip()
+        if not c:
+            return
+
+        # Examples:
+        # SOURce:FREQuency:CW 6.5 GHz
+        m = re.match(r"^SOURce:FREQuency:CW\s+([0-9.+-eE]+)\s*GHz$", c)
+        if m:
+            try:
+                self._sim_freq_ghz = float(m.group(1))
+            except Exception:
+                pass
+            return
+
+        # SOURce:POWer:LEVel:IMMediate:AMPLitude -10
+        m = re.match(
+            r"^SOURce:POWer:LEVel:IMMediate:AMPLitude\s+([0-9.+-eE]+)$", c
+        )
+        if m:
+            try:
+                self._sim_power_dbm = float(m.group(1))
+            except Exception:
+                pass
+            return
+
+        # OUTPut:STATe 1/0
+        m = re.match(r"^OUTPut:STATe\s+([01])$", c)
+        if m:
+            self._sim_rf_on = m.group(1) == "1"
+            return
+
+        # Ignore other commands in simulation (e.g. local release)
+
     def stop(self) -> None:
         self._running = False
 
@@ -209,10 +272,11 @@ class SigGenService(QObject):
     status_changed = Signal(str)
     resource_discovered = Signal(str)
 
-    def __init__(self, parent: Optional[QObject] = None) -> None:
+    def __init__(self, parent: Optional[QObject] = None, simulate: bool = False) -> None:
         super().__init__(parent)
         self._thread: Optional[QThread] = None
         self._worker: Optional[_SigGenWorker] = None
+        self._simulate = simulate
 
     def connect_device(self, resource_string: str) -> None:
         self.disconnect_device()
@@ -220,7 +284,7 @@ class SigGenService(QObject):
         resource_string = (resource_string or "").strip()
 
         self._thread = QThread()
-        self._worker = _SigGenWorker(resource_string)
+        self._worker = _SigGenWorker(resource_string, simulate=self._simulate)
         self._worker.moveToThread(self._thread)
 
         self._worker.state_ready.connect(self.state_ready.emit)

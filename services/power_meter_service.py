@@ -248,6 +248,12 @@ class PowerMeterService(QObject):
         self._input_resource = input_resource or None
         self._output_resource = output_resource or None
 
+    def input_resource(self) -> Optional[str]:
+        return self._input_resource
+
+    def output_resource(self) -> Optional[str]:
+        return self._output_resource
+
     def _list_visa_resources(self) -> list[str]:
         """Return all VISA resources visible to PyVISA."""
         try:
@@ -302,6 +308,46 @@ class PowerMeterService(QObject):
                 )
             )
         return devices
+
+    def scan_available_meter_resources(self) -> dict[str, object]:
+        """Scan the PC for currently available meter-like resources.
+
+        This does NOT change current input/output assignment; it's intended for UI selection.
+        """
+        visa_resources = self._list_visa_resources()
+        windows_devices = self._list_windows_usb_devices()
+
+        candidates: list[str] = []
+
+        # Prefer VISA resources when available.
+        for res in visa_resources:
+            up = res.upper()
+            if "USB" in up or "TCPIP" in up:
+                candidates.append(res)
+
+        # Add constructed USB resource strings from Windows device list (for NRP DLL fallback).
+        for d in windows_devices:
+            if d.serial:
+                candidates.append(f"USB::0x0AAD::0x0083::{d.serial}")
+
+        # Keep current resources visible in the dropdown even if not currently discoverable.
+        for cur in (self._input_resource, self._output_resource):
+            if cur:
+                candidates.append(cur)
+
+        # De-duplicate while preserving order.
+        seen: set[str] = set()
+        uniq: list[str] = []
+        for c in candidates:
+            if c not in seen:
+                seen.add(c)
+                uniq.append(c)
+
+        return {
+            "candidates": uniq,
+            "visa_resources": visa_resources,
+            "windows_usb_devices": windows_devices,
+        }
 
     def discover_meters(self) -> dict[str, Optional[str]]:
         """Search VISA resources for NRP-Z85 sensors by serial number."""
@@ -415,6 +461,42 @@ class PowerMeterService(QObject):
             self._output_resource,
             sim_center=15.0,
         )
+
+    def reconnect_input_meter(self, resource: Optional[str]) -> None:
+        """Reconnect only the input meter using the given VISA resource string."""
+        self._input_resource = (resource or "").strip() or None
+        if self._simulate:
+            self.input_status.emit("Simulation mode")
+            return
+
+        # Stop existing input worker/thread
+        if self._input_worker:
+            self._input_worker.stop()
+        if self._input_thread:
+            self._input_thread.quit()
+            self._input_thread.wait(2000)
+        self._input_worker = None
+        self._input_thread = None
+
+        self._start_worker("input", self._input_resource, sim_center=-10.0)
+
+    def reconnect_output_meter(self, resource: Optional[str]) -> None:
+        """Reconnect only the output meter using the given VISA resource string."""
+        self._output_resource = (resource or "").strip() or None
+        if self._simulate:
+            self.output_status.emit("Simulation mode")
+            return
+
+        # Stop existing output worker/thread
+        if self._output_worker:
+            self._output_worker.stop()
+        if self._output_thread:
+            self._output_thread.quit()
+            self._output_thread.wait(2000)
+        self._output_worker = None
+        self._output_thread = None
+
+        self._start_worker("output", self._output_resource, sim_center=15.0)
 
     def set_simulate(self, enabled: bool) -> None:
         """Switch between real hardware and simulation mode."""
